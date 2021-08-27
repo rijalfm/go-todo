@@ -1,93 +1,96 @@
 package service
 
 import (
+	"log"
 	"net/http"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	orm "github.com/go-pg/pg/v9/orm"
+	"github.com/go-pg/pg/v9"
+	// guuid "github.com/google/uuid"
 	"github.com/rijalfm/go-todo/internal/domain/entity"
 )
 
-// Todos Variable
-var Todos = []entity.Todo{}
 
-// Get All Todo Handler
-func GetTodos(c *gin.Context) {
-
-	c.IndentedJSON(http.StatusOK, Todos)
-
+// Create todo table if not already exists
+func CreateTodoTable(db *pg.DB) error {
+	opts := &orm.CreateTableOptions{
+		IfNotExists: true,
+	}
+	createError := db.CreateTable(&entity.Todo{}, opts)
+	if createError != nil {
+		log.Printf("Error while creating todo table, Reason: %v\n", createError)
+		return createError
+	}
+	log.Printf("Todo table created")
+	return nil
 }
 
-// Get Todo By Id Handler
-func GetTodoById(c *gin.Context) {
-
-	id, _ := strconv.Atoi(c.Param("id"))
-
-	for _, todo := range Todos {
-		if todo.ID == id {
-			c.IndentedJSON(http.StatusOK, todo)
-			return
-		}
-	}
-
-	c.IndentedJSON(http.StatusNotFound, gin.H{"message": "Todo not found"})
-
+// Initialize DB connection
+var dbConnect *pg.DB
+func InitiateDB(db *pg.DB) {
+	dbConnect = db
 }
 
-// New Todo Handler
-func SaveTodo(c *gin.Context) {
 
-	newTodo := new(entity.Todo)
+// Get all todo
+func GetAllTodo(c *gin.Context) {
+	var todos []entity.Todo
+	err := dbConnect.Model(&todos).Select()
 
-	if err := c.BindJSON(&newTodo); err != nil {
-		return
-	}
-
-	if len(Todos) > 0 {
-		sort.Slice(Todos, func(i, j int) bool {
-			return Todos[i].ID < Todos[j].ID
+	if err != nil {
+		log.Printf("Error while getting all todos, Reason: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status":  http.StatusInternalServerError,
+			"error": "Something went wrong",
 		})
-		newTodo.ID = Todos[len(Todos)-1].ID + 1
-	} else {
-		newTodo.ID = 1
-	}
-
-	newTodo.CreatedAt = time.Now()
-
-	if err := newTodo.Validate(); err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": err["message"]})
 		return
 	}
 
-	Todos = append(Todos, *newTodo)
-	c.IndentedJSON(http.StatusCreated, newTodo)
-
+	c.JSON(http.StatusOK, gin.H{
+		"status":  http.StatusOK,
+		"message": "success",
+		"data": todos,
+	})
 }
 
-// Delete Handler
-func DeleteTodoById(c *gin.Context) {
+// Create a new todo
+func CreateTodo(c *gin.Context) {
+	var todo entity.Todo
+	c.BindJSON(&todo)
+	// id := guuid.New().String()
+	title := todo.Title
+	description := todo.Description
 
-	id, _ := strconv.Atoi(c.Param("id"))
-
-	for idx, todo := range Todos {
-
-		if todo.ID == id {
-			Todos = removeTodo(Todos, idx)
-			c.IndentedJSON(http.StatusOK, todo)
-			return
-		}
+	if err := todo.Validate(); err != nil {
+		log.Printf("Error null value, Reason: %v\n", err["message"])
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status":  http.StatusBadRequest,
+			"error": err["message"],
+		})
+		return
 	}
 
-	c.IndentedJSON(http.StatusNotFound, gin.H{"message": "Todo not found"})
+	insertError := dbConnect.Insert(&entity.Todo{
+		Title:       title,
+		Description:      description,
+		IsDone:     false,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	})
 
-}
+	if insertError != nil {
+		log.Printf("Error while inserting new todo into db, Reason: %v\n", insertError)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status":  http.StatusInternalServerError,
+			"error": "Something went wrong",
+		})
+		return
+	}
 
-// Remove Slice Elmenet By Index Function
-func removeTodo(t []entity.Todo, index int) []entity.Todo {
-
-	newTodos := t
-	return append(newTodos[:index], newTodos[index+1:]...)
-
+	c.JSON(http.StatusCreated, gin.H{
+		"status":  http.StatusCreated,
+		"message": "Todo created successfully",
+	})
 }
